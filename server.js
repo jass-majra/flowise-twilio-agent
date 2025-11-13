@@ -1,56 +1,76 @@
 import express from "express";
+import pkg from "twilio";
+import fetch from "node-fetch";
 import bodyParser from "body-parser";
 import dotenv from "dotenv";
-import fetch from "node-fetch";
-import pkg from "twilio";
 
 dotenv.config();
 const { twiml } = pkg;
-
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
-const FLOWISE_API_KEY = process.env.FLOWISE_API_KEY;
-const FLOWISE_URL = "https://cloud.flowiseai.com/api/v1/prediction/c7f1f093-e34c-432d-9902-90175f9ed71a";
+const FLOWISE_API_URL = process.env.FLOWISE_API_URL;
+const FLOWISE_CHATFLOW_ID = process.env.FLOWISE_CHATFLOW_ID;
+const FLOWISE_API_KEY = process.env.FLOWISE_API_KEY || "";
 
-app.get("/", (req, res) => {
-  res.send("✅ Flowise Twilio Agent is running successfully!");
-});
+// Helper function to query Flowise
+async function queryFlowise(userInput) {
+  const response = await fetch(`${FLOWISE_API_URL}/${FLOWISE_CHATFLOW_ID}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(FLOWISE_API_KEY ? { Authorization: `Bearer ${FLOWISE_API_KEY}` } : {}),
+    },
+    body: JSON.stringify({ question: userInput }),
+  });
 
+  const data = await response.json();
+  return data?.text || "I'm sorry, could you please repeat that?";
+}
+
+// Main voice route
 app.post("/voice", async (req, res) => {
-  console.log("Incoming call request:", req.body);
-  const response = new twiml.VoiceResponse();
+  const twimlResponse = new twiml.VoiceResponse();
+  const userInput = req.body.SpeechResult || req.body.Body;
 
-  try {
-    const userMessage = req.body.SpeechResult || req.body.Body || "Hello";
-
-    const flowiseResponse = await fetch(FLOWISE_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${FLOWISE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        question: userMessage,
-        overrideConfig: { sessionId: req.body.CallSid },
-      }),
+  if (!userInput) {
+    // Initial greeting
+    twimlResponse.say("Hello! This is your AI assistant. How can I help you today?", {
+      voice: "alice",
+      language: "en-US",
     });
-
-    const data = await flowiseResponse.json();
-    const botReply = data.text || "Sorry, I couldn’t get a response from the AI.";
-
-    response.say({ voice: "Polly.Joanna" }, botReply);
-  } catch (error) {
-    console.error("Error handling voice request:", error);
-    response.say("Sorry, there was a problem connecting to the AI agent.");
+    // Wait 15 seconds for user to respond
+    twimlResponse.gather({
+      input: "speech",
+      action: "/voice",
+      method: "POST",
+      timeout: 15,
+    });
+  } else {
+    try {
+      // Send user's speech to Flowise
+      const aiResponse = await queryFlowise(userInput);
+      twimlResponse.say(aiResponse, { voice: "alice", language: "en-US" });
+      // Keep conversation going, wait 15s for next response
+      twimlResponse.gather({
+        input: "speech",
+        action: "/voice",
+        method: "POST",
+        timeout: 15,
+      });
+    } catch (err) {
+      console.error("Error contacting Flowise:", err);
+      twimlResponse.say("Sorry, there was a problem connecting to the AI agent.");
+    }
   }
 
   res.type("text/xml");
-  res.send(response.toString());
+  res.send(twimlResponse.toString());
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.get("/", (req, res) => {
+  res.send("✅ Flowise Twilio Agent is running and listening for calls");
 });
+
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
