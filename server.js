@@ -1,61 +1,56 @@
 import express from "express";
 import bodyParser from "body-parser";
 import fetch from "node-fetch";
+import { twiml } from "twilio";
 import dotenv from "dotenv";
-import twilio from "twilio";
 
 dotenv.config();
-
 const app = express();
-const port = process.env.PORT || 10000;
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// Twilio VoiceResponse helper
-const { VoiceResponse } = twilio.twiml;
+const PORT = process.env.PORT || 10000;
 
-// ✅ Health check route
+// Root endpoint
 app.get("/", (req, res) => {
-  res.send("✅ Flowise Twilio AI Agent is running");
+  res.send("✅ Flowise-Twilio Voice Agent is running!");
 });
 
-// ✅ Main voice endpoint
+// Main voice webhook
 app.post("/voice", async (req, res) => {
-  console.log("📞 Incoming call:", req.body);
-  const twiml = new VoiceResponse();
+  const twimlResponse = new twiml.VoiceResponse();
+  const callerMessage = req.body.SpeechResult || req.body.Body || "Hello";
 
   try {
-    // Step 1: Capture caller speech or fallback
-    const question = req.body.SpeechResult || "Hello, can you help me?";
+    console.log("Incoming call:", req.body);
 
-    // Step 2: Call Flowise API (replace YOUR_FLOWISE_API_URL below)
-    const flowiseResponse = await fetch("https://YOUR-FLOWISE-URL/api/v1/prediction/YOUR_CHATFLOW_ID", {
+    // Flowise API call
+    const response = await fetch("https://cloud.flowiseai.com/api/v1/prediction/c7f1f093-e34c-432d-9902-90175f9ed71a", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question: question,
-        history: [],
-      }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer YOUR_FLOWISE_API_KEY_HERE"
+      },
+      body: JSON.stringify({ question: callerMessage })
     });
 
-    const data = await flowiseResponse.json();
-    console.log("🤖 Flowise reply:", data);
+    const data = await response.json();
+    const aiReply = data?.text || "Sorry, I had trouble connecting to the AI agent.";
 
-    // Step 3: Get AI reply text
-    const aiReply = data.text || "Sorry, I didn’t understand that.";
+    console.log("AI reply:", aiReply);
 
-    // Step 4: Speak back to caller
-    twiml.say(aiReply, { voice: "Polly.Joanna" }); // You can change to "Polly.Matthew" etc.
+    // Twilio voice reply
+    twimlResponse.say(aiReply, { voice: "Polly.Joanna" });
   } catch (error) {
-    console.error("❌ Error:", error);
-    twiml.say("Sorry, there was a problem connecting to the AI agent.");
+    console.error("Error:", error);
+    twimlResponse.say("Sorry, there was a problem connecting to the AI agent.");
   }
 
   res.type("text/xml");
-  res.send(twiml.toString());
+  res.send(twimlResponse.toString());
 });
 
 // Start server
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
