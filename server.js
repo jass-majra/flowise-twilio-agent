@@ -5,19 +5,20 @@ import bodyParser from "body-parser";
 import dotenv from "dotenv";
 
 dotenv.config();
-const { twiml } = pkg;
 
+const { twiml } = pkg;
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
+
+// CRITICAL: Twilio needs BOTH of these to read speech input
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true }));
 
 const PORT = process.env.PORT || 10000;
 const FLOWISE_API_URL = process.env.FLOWISE_API_URL;
 const FLOWISE_CHATFLOW_ID = process.env.FLOWISE_CHATFLOW_ID;
 const FLOWISE_API_KEY = process.env.FLOWISE_API_KEY;
 
-// ---------------------------
-// Query Flowise (WITH correct payload)
-// ---------------------------
+// Query Flowise
 async function queryFlowise(userInput, sessionId) {
   const url = `${FLOWISE_API_URL}/${FLOWISE_CHATFLOW_ID}`;
 
@@ -30,33 +31,26 @@ async function queryFlowise(userInput, sessionId) {
     body: JSON.stringify({
       question: userInput,
       overrideConfig: {
-        sessionId: sessionId
+        sessionId: sessionId,
       }
     }),
   });
 
   const data = await response.json();
-
-  // Flowise cloud uses "response" instead of "text" sometimes
-  const reply =
-    data.text ||
-    data.response ||
-    data.answer ||
-    "Sorry, I didn’t catch that.";
-
-  return reply;
+  return data.text || "Sorry, can you please repeat that?";
 }
 
-// ---------------------------
-// TWILIO VOICE ROUTE
-// ---------------------------
+// Main call logic
 app.post("/voice", async (req, res) => {
   const response = new twiml.VoiceResponse();
-  const speech = req.body.SpeechResult;
-  const caller = req.body.From || "anonymous";
 
-  // FIRST CALL: no speech yet
-  if (!speech) {
+  // CRITICAL: this must work now
+  const userInput = req.body.SpeechResult;
+  const caller = req.body.From || "unknown";
+
+  console.log("🗣 Incoming SpeechResult:", userInput);
+
+  if (!userInput) {
     response.say(
       "Thank you for calling Sparkle Car Wash. How can I help you today?",
       { voice: "alice", language: "en-US" }
@@ -66,16 +60,16 @@ app.post("/voice", async (req, res) => {
       input: "speech",
       action: "/voice",
       method: "POST",
-      timeout: 8,
+      speechTimeout: "auto",
+      timeout: 10,
     });
 
     res.type("text/xml");
     return res.send(response.toString());
   }
 
-  // USER SAID SOMETHING → SEND TO FLOWISE
   try {
-    const aiReply = await queryFlowise(speech, caller);
+    const aiReply = await queryFlowise(userInput, caller);
 
     response.say(aiReply, { voice: "alice", language: "en-US" });
 
@@ -83,30 +77,24 @@ app.post("/voice", async (req, res) => {
       input: "speech",
       action: "/voice",
       method: "POST",
-      timeout: 8,
+      speechTimeout: "auto",
+      timeout: 10,
     });
 
   } catch (err) {
     console.error("Flowise error:", err);
-
-    response.say(
-      "Sorry, I am having trouble accessing the system right now.",
-      { voice: "alice", language: "en-US" }
-    );
+    response.say("Sorry, I am having trouble connecting right now.");
   }
 
   res.type("text/xml");
   res.send(response.toString());
 });
 
-// ---------------------------
-// ROOT URL
-// ---------------------------
+// For testing
 app.get("/", (req, res) => {
-  res.send("Flowise–Twilio phone bot is running.");
+  res.send("Server is running.");
 });
 
-// ---------------------------
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
