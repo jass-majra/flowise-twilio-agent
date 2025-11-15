@@ -5,20 +5,16 @@ import bodyParser from "body-parser";
 import dotenv from "dotenv";
 
 dotenv.config();
-
 const { twiml } = pkg;
 const app = express();
-
-// CRITICAL: Twilio needs BOTH of these to read speech input
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.urlencoded({ extended: false }));
 
 const PORT = process.env.PORT || 10000;
 const FLOWISE_API_URL = process.env.FLOWISE_API_URL;
 const FLOWISE_CHATFLOW_ID = process.env.FLOWISE_CHATFLOW_ID;
 const FLOWISE_API_KEY = process.env.FLOWISE_API_KEY;
 
-// Query Flowise
+// Send user message to Flowise
 async function queryFlowise(userInput, sessionId) {
   const url = `${FLOWISE_API_URL}/${FLOWISE_CHATFLOW_ID}`;
 
@@ -31,24 +27,20 @@ async function queryFlowise(userInput, sessionId) {
     body: JSON.stringify({
       question: userInput,
       overrideConfig: {
-        sessionId: sessionId,
+        sessionId: sessionId, 
       }
     }),
   });
 
   const data = await response.json();
-  return data.text || "Sorry, can you please repeat that?";
+  return data.text || "Sorry, can you say that again?";
 }
 
 // Main call logic
 app.post("/voice", async (req, res) => {
   const response = new twiml.VoiceResponse();
-
-  // CRITICAL: this must work now
   const userInput = req.body.SpeechResult;
   const caller = req.body.From || "unknown";
-
-  console.log("🗣 Incoming SpeechResult:", userInput);
 
   if (!userInput) {
     response.say(
@@ -60,41 +52,38 @@ app.post("/voice", async (req, res) => {
       input: "speech",
       action: "/voice",
       method: "POST",
+      timeout: 8,
       speechTimeout: "auto",
-      timeout: 10,
+      language: "en-US"
     });
 
-    res.type("text/xml");
-    return res.send(response.toString());
-  }
+  } else {
+    try {
+      const aiReply = await queryFlowise(userInput, caller);
 
-  try {
-    const aiReply = await queryFlowise(userInput, caller);
+      response.say(aiReply, { voice: "alice", language: "en-US" });
 
-    response.say(aiReply, { voice: "alice", language: "en-US" });
+      response.gather({
+        input: "speech",
+        action: "/voice",
+        method: "POST",
+        timeout: 8,
+        speechTimeout: "auto",
+        language: "en-US"
+      });
 
-    response.gather({
-      input: "speech",
-      action: "/voice",
-      method: "POST",
-      speechTimeout: "auto",
-      timeout: 10,
-    });
-
-  } catch (err) {
-    console.error("Flowise error:", err);
-    response.say("Sorry, I am having trouble connecting right now.");
+    } catch (err) {
+      console.error("Flowise error:", err);
+      response.say("Sorry, my system is having trouble right now.");
+    }
   }
 
   res.type("text/xml");
   res.send(response.toString());
 });
 
-// For testing
 app.get("/", (req, res) => {
-  res.send("Server is running.");
+  res.send("Flowise + Twilio agent running.");
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
